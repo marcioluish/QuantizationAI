@@ -45,10 +45,11 @@ def transcribe_audio(
         
         from transformers import pipeline
         
-        # Load the pipeline
+        # Load the pipeline (float16 to halve GPU memory usage)
         pipe = pipeline(
             "automatic-speech-recognition",
             model="openai/whisper-medium.en",
+            torch_dtype=torch.float16,
             device="cuda" if torch.cuda.is_available() else "cpu",
             return_timestamps=True
         )
