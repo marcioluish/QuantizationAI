@@ -8,7 +8,7 @@ from typing import Callable, Optional, Tuple
 
 import torch
 
-from utils import clear_gpu_memory, logger
+from utils import clear_gpu_memory, log_gpu_memory, logger
 
 
 # Transcription cache (in-memory)
@@ -42,6 +42,7 @@ def transcribe_audio(
             progress_callback(0.0, "Loading Whisper model...")
         
         logger.info("Loading Whisper medium.en model...")
+        log_gpu_memory("before Whisper load")
         
         from transformers import pipeline
         
@@ -53,6 +54,7 @@ def transcribe_audio(
             device="cuda" if torch.cuda.is_available() else "cpu",
             return_timestamps=True
         )
+        log_gpu_memory("after Whisper load")
         
         # Progress: 25%
         if progress_callback:
@@ -65,12 +67,14 @@ def transcribe_audio(
             progress_callback(0.50, "Transcribing audio...")
         
         # Perform transcription with chunking for long audio
+        log_gpu_memory("before Whisper inference")
         result = pipe(
             audio_path,
             chunk_length_s=30,
             batch_size=8,
             return_timestamps=True
         )
+        log_gpu_memory("after Whisper inference")
         
         # Progress: 75%
         if progress_callback:

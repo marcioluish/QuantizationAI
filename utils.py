@@ -18,14 +18,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def clear_gpu_memory():
+def log_gpu_memory(label: str = "") -> None:
+    """Log current GPU memory usage. Call at every key step."""
+    if not torch.cuda.is_available():
+        return
+    allocated = torch.cuda.memory_allocated(0) / (1024**3)
+    reserved = torch.cuda.memory_reserved(0) / (1024**3)
+    total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    free = total - reserved
+    logger.info(
+        f"[GPU {label}] "
+        f"Allocated: {allocated:.2f} GB | "
+        f"Reserved: {reserved:.2f} GB | "
+        f"Free: {free:.2f} GB | "
+        f"Total: {total:.2f} GB"
+    )
+
+
+def clear_gpu_memory(label: str = ""):
     """Clear GPU memory and run garbage collection."""
-    logger.info("Clearing GPU memory...")
+    log_gpu_memory(f"before cleanup{' - ' + label if label else ''}")
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-    logger.info("GPU memory cleared")
+    log_gpu_memory(f"after cleanup{' - ' + label if label else ''}")
 
 
 def get_gpu_memory_info() -> Tuple[float, float, float]:

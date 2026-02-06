@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteria, 
 from model_configs import get_model_info, get_model_display_name
 from quantization import create_quantization_config
 from stats import StatisticsCollector, ModelStatistics
-from utils import clear_gpu_memory, filter_thinking_tokens, check_model_access, logger
+from utils import clear_gpu_memory, log_gpu_memory, filter_thinking_tokens, check_model_access, logger
 
 
 # System prompt for minute generation
@@ -92,6 +92,7 @@ def generate_minutes(
         
         # Load tokenizer
         logger.info(f"Loading tokenizer for {model_id}")
+        log_gpu_memory(f"before tokenizer load - {model_id}")
         tokenizer = AutoTokenizer.from_pretrained(
             model_id,
             token=hf_token,
@@ -115,6 +116,7 @@ def generate_minutes(
         
         # Load model
         logger.info(f"Loading model {model_id}")
+        log_gpu_memory(f"before model load - {model_id}")
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
             device_map="auto",
@@ -122,6 +124,7 @@ def generate_minutes(
             token=hf_token,
             trust_remote_code=True
         )
+        log_gpu_memory(f"after model load - {model_id}")
         
         # Progress: 50%
         if progress_callback:
@@ -149,6 +152,7 @@ def generate_minutes(
         
         # Generate
         logger.info("Starting generation")
+        log_gpu_memory(f"before generate - {model_id}")
         with torch.no_grad():
             # Track first token timing via stopping criteria
             first_token_criteria = FirstTokenRecorder(
@@ -169,6 +173,8 @@ def generate_minutes(
         # Progress: 90%
         if progress_callback:
             progress_callback(0.90, "Processing output...")
+        
+        log_gpu_memory(f"after generate - {model_id}")
         
         # Decode output
         generated_tokens = outputs[0][input_length:]

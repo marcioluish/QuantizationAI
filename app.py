@@ -32,6 +32,7 @@ from utils import (
     validate_audio_file,
     validate_model_selection,
     clear_gpu_memory,
+    log_gpu_memory,
     logger
 )
 
@@ -234,6 +235,7 @@ def on_generate_click(
         # ==================================================================
         # STEP 1  –  Transcription
         # ==================================================================
+        log_gpu_memory("before transcription step")
         logger.info("Starting transcription")
 
         def transcription_cb(pct, msg):
@@ -263,7 +265,7 @@ def on_generate_click(
             return
 
         # clean GPU after Whisper
-        clear_gpu_memory()
+        clear_gpu_memory("after Whisper")
 
         # ==================================================================
         # STEP 2  –  Sequential minute generation
@@ -309,7 +311,7 @@ def on_generate_click(
 
             # GPU cleanup happens inside generate_minutes already,
             # but do an extra pass to be safe
-            clear_gpu_memory()
+            clear_gpu_memory(f"after model {i+1}/{n_models} - {model_id}")
 
             u = _blank_updates()
             if error:
