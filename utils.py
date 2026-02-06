@@ -10,12 +10,14 @@ from typing import Optional, Tuple
 
 import torch
 
-# Configure logging
+# Configure logging - use force=True to override any prior basicConfig
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    force=True
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("meeting_minutes")
+logger.setLevel(logging.INFO)
 
 
 def log_gpu_memory(label: str = "") -> None:
