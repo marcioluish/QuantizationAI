@@ -89,9 +89,6 @@ def validate_model_selection(selected_models: list) -> Tuple[bool, Optional[str]
     if not selected_models:
         return False, "No models selected. Please select at least one model."
     
-    if len(selected_models) > 2:
-        return False, "Too many models selected. Maximum is 2 models."
-    
     logger.info(f"Model selection validated: {selected_models}")
     return True, None
 
@@ -108,33 +105,29 @@ def check_model_access(model_id: str, hf_token: Optional[str] = None) -> Tuple[b
         Tuple of (has_access, error_message)
     """
     try:
-        from huggingface_hub import HfApi, model_info
+        from huggingface_hub import HfApi
         
         api = HfApi(token=hf_token)
-        info = api.model_info(model_id)
+        info = api.model_info(model_id, token=hf_token)
         
-        # Check if model is gated
-        if info.gated:
-            # Try to verify access
-            try:
-                api.model_info(model_id, token=hf_token)
-                logger.info(f"Model access verified: {model_id}")
-                return True, None
-            except Exception as e:
-                error_msg = (
-                    f"Access denied to {model_id}. This is a gated model. "
-                    f"Please visit https://huggingface.co/{model_id} to request access, "
-                    f"then ensure your HF_TOKEN has the required permissions."
-                )
-                logger.warning(f"Model access denied: {model_id}")
-                return False, error_msg
-        
+        # If the model is gated and we got here, we have access.
+        # If we did NOT have access the call above would have raised
+        # a RepositoryNotFoundError / GatedRepoAccessError.
         logger.info(f"Model access verified: {model_id}")
         return True, None
         
     except Exception as e:
-        error_msg = f"Failed to check model access for {model_id}: {str(e)}"
-        logger.error(error_msg)
+        err_str = str(e).lower()
+        if "gated" in err_str or "access" in err_str or "403" in err_str:
+            error_msg = (
+                f"Access denied to {model_id}. This is a gated model. "
+                f"Please visit https://huggingface.co/{model_id} to request access, "
+                f"then ensure your HF_TOKEN has the required permissions."
+            )
+            logger.warning(f"Model access denied: {model_id}")
+        else:
+            error_msg = f"Failed to check model access for {model_id}: {str(e)}"
+            logger.error(error_msg)
         return False, error_msg
 
 

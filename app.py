@@ -36,7 +36,10 @@ from utils import (
 )
 
 
+# ---------------------------------------------------------------------------
 # Global state
+# ---------------------------------------------------------------------------
+
 class AppState:
     """Global application state."""
     def __init__(self):
@@ -45,57 +48,62 @@ class AppState:
         self.hf_token: Optional[str] = None
         self.openai_key: Optional[str] = None
         self.stats_collector: Optional[StatisticsCollector] = None
-        self.results: Dict[str, str] = {}  # model_id -> generated minutes
-        self.errors: Dict[str, str] = {}   # model_id -> error message
+        self.results: Dict[str, str] = {}   # model_id -> generated minutes
+        self.errors: Dict[str, str] = {}    # model_id -> error message
 
 
 app_state = AppState()
 
-# UI component registries
+# Registries populated by create_app() and consumed by event handlers
 MODEL_COMPONENTS: Dict[str, Dict[str, gr.Component]] = {}
-MODEL_ORDER: List[str] = []
+MODEL_TABS: Dict[str, gr.Tab] = {}
+MODEL_ORDER: List[str] = []            # all model IDs in display order
 OUTPUT_COMPONENTS: List[gr.Component] = []
-OUTPUT_INDEX: Dict[gr.Component, int] = {}
+OUTPUT_INDEX: Dict[int, int] = {}      # id(component) -> index
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def progress_html(percent: int, status: str) -> str:
-    """Return HTML for a simple progress bar with status."""
+    """Return HTML for a simple progress bar with status text."""
     percent = max(0, min(100, int(percent)))
     return (
         f"<div style='margin-bottom:6px;'>"
-        f"<progress value='{percent}' max='100' style='width:100%;'></progress>"
-        f"</div><div>{status}</div>"
+        f"<progress value='{percent}' max='100' style='width:100%;height:22px;'></progress>"
+        f"</div><div style='font-size:0.9em;'>{status}</div>"
     )
 
 
 def _blank_updates():
-    """Create a list of empty updates for all outputs."""
+    """Create a list of gr.update() for every output component."""
     return [gr.update() for _ in OUTPUT_COMPONENTS]
 
 
-def _set_update(updates, component: gr.Component, **kwargs) -> None:
-    """Set a component update in the updates list."""
-    index = OUTPUT_INDEX.get(component)
-    if index is None:
-        return
-    updates[index] = gr.update(**kwargs)
+def _set(updates, component, **kwargs):
+    """Set a component update in the updates list (by identity)."""
+    idx = OUTPUT_INDEX.get(id(component))
+    if idx is not None:
+        updates[idx] = gr.update(**kwargs)
 
+
+# ---------------------------------------------------------------------------
+# Token initialisation
+# ---------------------------------------------------------------------------
 
 def initialize_tokens():
-    """Initialize API tokens from environment/Colab secrets."""
+    """Load API tokens from Colab secrets or environment variables."""
     try:
-        # Try Colab secrets first
         from google.colab import userdata
         app_state.hf_token = userdata.get('HF_TOKEN')
         app_state.openai_key = userdata.get('OPENAI_API_KEY')
         logger.info("Loaded tokens from Colab secrets")
     except Exception:
-        # Fall back to environment variables
         app_state.hf_token = os.environ.get('HF_TOKEN')
         app_state.openai_key = os.environ.get('OPENAI_API_KEY')
         logger.info("Loaded tokens from environment variables")
-    
-    # Login to HuggingFace if token available
+
     if app_state.hf_token:
         try:
             from huggingface_hub import login
@@ -105,55 +113,74 @@ def initialize_tokens():
             logger.warning(f"Failed to login to Hugging Face: {e}")
 
 
-def update_double_quant_options(bits: str) -> Tuple[gr.Dropdown, gr.Markdown]:
-    """Update double quantization options based on bits selection."""
+# ---------------------------------------------------------------------------
+# Quantization dropdown helpers
+# ---------------------------------------------------------------------------
+
+def update_double_quant_options(bits: str):
     options, enabled, reason = get_double_quant_options(bits)
-    
     if enabled:
         return (
             gr.Dropdown(choices=options, value=options[0], interactive=True),
-            gr.Markdown(visible=False)
+            gr.Markdown(visible=False),
         )
-    else:
-        return (
-            gr.Dropdown(choices=options, value=options[0], interactive=False),
-            gr.Markdown(value=f"*{reason}*", visible=True)
-        )
+    return (
+        gr.Dropdown(choices=options, value=options[0], interactive=False),
+        gr.Markdown(value=f"*{reason}*", visible=True),
+    )
 
 
-def update_quant_type_options(bits: str) -> Tuple[gr.Dropdown, gr.Markdown]:
-    """Update quantization type options based on bits selection."""
+def update_quant_type_options(bits: str):
     options, enabled, reason = get_quant_type_options(bits)
-    
     if enabled:
         return (
             gr.Dropdown(choices=options, value=options[0], interactive=True),
-            gr.Markdown(visible=False)
+            gr.Markdown(visible=False),
         )
-    else:
-        return (
-            gr.Dropdown(choices=options, value=options[0], interactive=False),
-            gr.Markdown(value=f"*{reason}*", visible=True)
-        )
+    return (
+        gr.Dropdown(choices=options, value=options[0], interactive=False),
+        gr.Markdown(value=f"*{reason}*", visible=True),
+    )
 
 
-def validate_inputs(
-    audio_file: Optional[str],
-    selected_models: List[str]
-) -> Tuple[bool, str]:
-    """Validate all inputs before processing."""
-    # Validate audio file
-    is_valid, error = validate_audio_file(audio_file)
-    if not is_valid:
-        return False, error
-    
-    # Validate model selection
-    is_valid, error = validate_model_selection(selected_models)
-    if not is_valid:
-        return False, error
-    
+# ---------------------------------------------------------------------------
+# Model-info markdown (shown in each result tab)
+# ---------------------------------------------------------------------------
+
+def get_model_info_html(model_id: str) -> str:
+    info = get_model_info(model_id)
+    if not info:
+        return ""
+    return (
+        f"### Model Information\n\n"
+        f"| Property | Value |\n"
+        f"|----------|-------|\n"
+        f"| **Organization** | {info.organization} |\n"
+        f"| **Parameters** | {info.parameters} |\n"
+        f"| **Size (FP16)** | {info.size_fp16} |\n"
+        f"| **Size (4-bit)** | {info.size_4bit} |\n"
+        f"| **Fine-tuned** | {'Yes - ' + info.fine_tune_method if info.is_fine_tuned else 'No'} |\n"
+        f"\n{info.description}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def validate_inputs(audio_file, selected_models):
+    ok, err = validate_audio_file(audio_file)
+    if not ok:
+        return False, err
+    ok, err = validate_model_selection(selected_models)
+    if not ok:
+        return False, err
     return True, ""
 
+
+# ---------------------------------------------------------------------------
+# Main generation handler  (generator – yields update lists)
+# ---------------------------------------------------------------------------
 
 def on_generate_click(
     audio_file: Optional[str],
@@ -161,524 +188,421 @@ def on_generate_click(
     bits: str,
     double_quant: str,
     quant_type: str,
-    progress=gr.Progress()
+    progress=gr.Progress(),
 ):
-    """
-    Main handler for the Generate Minutes button.
-    Orchestrates transcription and minute generation.
-    """
-    # Validate inputs
-    is_valid, error = validate_inputs(audio_file, selected_models)
-    if not is_valid:
-        updates = _blank_updates()
-        _set_update(updates, error_display, value=f"**Error:** {error}", visible=True)
-        _set_update(updates, generate_btn, value="Generate Minutes", variant="primary")
-        yield updates
+    # ---- validate --------------------------------------------------------
+    ok, err = validate_inputs(audio_file, selected_models)
+    if not ok:
+        u = _blank_updates()
+        _set(u, error_display, value=f"**Error:** {err}", visible=True)
+        _set(u, generate_btn, value="Generate Minutes", variant="primary")
+        yield u
         return
-    
-    # Start processing
+
+    # ---- initialise state ------------------------------------------------
     app_state.is_processing = True
     app_state.cancel_requested = False
     app_state.stats_collector = StatisticsCollector()
     app_state.results = {}
     app_state.errors = {}
-    
+
     try:
-        # Update button to Cancel and initialize model tabs
-        updates = _blank_updates()
-        _set_update(updates, error_display, visible=False)
-        _set_update(updates, generate_btn, value="Cancel", variant="stop")
-        _set_update(updates, transcription_progress, value="Starting...", visible=True)
-        _set_update(updates, transcription_accordion, visible=False)
-        _set_update(updates, analysis_output, visible=False)
-        
-        # Initialize model tabs
-        for model_id in MODEL_ORDER:
-            display_name = get_model_display_name(model_id)
-            status = (
-                f"Model {display_name} minute processing didn't start yet."
-                if model_id in selected_models
-                else f"Model {display_name} not selected."
-            )
-            _set_update(updates, MODEL_COMPONENTS[model_id]["status"], value=status)
-            _set_update(updates, MODEL_COMPONENTS[model_id]["progress"], value=progress_html(0, "Not started"))
-            _set_update(updates, MODEL_COMPONENTS[model_id]["minutes"], value="")
-        
-        yield updates
-        
-        # Check for cancellation
+        # -- hide all model tabs & stats, show progress --------------------
+        u = _blank_updates()
+        _set(u, error_display, visible=False)
+        _set(u, generate_btn, value="Cancel", variant="stop")
+        _set(u, transcription_progress, value="Starting transcription...", visible=True)
+        _set(u, transcription_accordion, visible=False)
+        _set(u, analysis_output, visible=False)
+        _set(u, stats_tab_col, visible=False)
+        _set(u, stats_notice, visible=False)
+        _set(u, stats_group, visible=False)
+
+        # hide every model tab
+        for mid in MODEL_ORDER:
+            _set(u, MODEL_TABS[mid], visible=False)
+            _set(u, MODEL_COMPONENTS[mid]["status"], value="")
+            _set(u, MODEL_COMPONENTS[mid]["progress"], value="")
+            _set(u, MODEL_COMPONENTS[mid]["minutes"], value="")
+        yield u
+
+        # ---- cancellation check ------------------------------------------
         if app_state.cancel_requested:
             yield _handle_cancellation()
             return
-        
-        # Step 1: Transcription
+
+        # ==================================================================
+        # STEP 1  –  Transcription
+        # ==================================================================
         logger.info("Starting transcription")
-        
-        def transcription_progress_callback(pct, msg):
-            progress(pct * 0.3, desc=msg)  # 0-30% for transcription
-        
-        transcription, trans_error = transcribe_audio(
-            audio_file,
-            progress_callback=transcription_progress_callback
+
+        def transcription_cb(pct, msg):
+            progress(pct * 0.2, desc=msg)  # 0-20 %
+
+        transcription, trans_err = transcribe_audio(
+            audio_file, progress_callback=transcription_cb
         )
-        
-        if trans_error:
-            updates = _blank_updates()
-            _set_update(updates, error_display, value=f"**Transcription Error:** {trans_error}", visible=True)
-            _set_update(updates, generate_btn, value="Generate Minutes", variant="primary")
-            _set_update(updates, transcription_progress, visible=False)
-            yield updates
+
+        if trans_err:
+            u = _blank_updates()
+            _set(u, error_display, value=f"**Transcription Error:** {trans_err}", visible=True)
+            _set(u, generate_btn, value="Generate Minutes", variant="primary")
+            _set(u, transcription_progress, visible=False)
+            yield u
             return
-        
-        # Show transcription
-        updates = _blank_updates()
-        _set_update(updates, transcription_progress, value="Transcription complete!", visible=True)
-        _set_update(
-            updates,
-            transcription_accordion,
-            label="Transcription (click to expand)",
-            open=False,
-            visible=True
-        )
-        _set_update(updates, transcription_display, value=transcription)
-        yield updates
-        
-        # Check for cancellation
+
+        # show collapsed transcription
+        u = _blank_updates()
+        _set(u, transcription_progress, value="Transcription complete!", visible=True)
+        _set(u, transcription_accordion, label="Transcription (click to expand)", open=False, visible=True)
+        _set(u, transcription_display, value=transcription)
+        yield u
+
         if app_state.cancel_requested:
             yield _handle_cancellation()
             return
-        
-        # Prepare quantization config
-        quant_config = {
-            "bits": bits,
-            "double_quant": double_quant,
-            "quant_type": quant_type
-        }
-        
-        # Step 2: Generate minutes for each model
-        logger.info(f"Generating minutes for {len(selected_models)} models")
-        
-        # Clear GPU before loading minute generation models
+
+        # clean GPU after Whisper
         clear_gpu_memory()
-        
-        # Process models sequentially (GPU memory constraint)
+
+        # ==================================================================
+        # STEP 2  –  Sequential minute generation
+        # ==================================================================
+        quant_cfg = {"bits": bits, "double_quant": double_quant, "quant_type": quant_type}
+        n_models = len(selected_models)
+        logger.info(f"Generating minutes for {n_models} model(s) sequentially")
+
         for i, model_id in enumerate(selected_models):
             if app_state.cancel_requested:
                 yield _handle_cancellation()
                 return
-            
+
             display_name = get_model_display_name(model_id)
-            updates = _blank_updates()
-            _set_update(
-                updates,
-                MODEL_COMPONENTS[model_id]["status"],
-                value="Loading model and preparing input..."
-            )
-            _set_update(
-                updates,
-                MODEL_COMPONENTS[model_id]["progress"],
-                value=progress_html(10, "Loading model...")
-            )
-            yield updates
-            
-            def model_progress_callback(pct, msg):
-                # 30-90% for model generation, split among models
-                base = 0.3 + (0.6 / len(selected_models)) * i
-                model_portion = 0.6 / len(selected_models)
-                progress(base + pct * model_portion, desc=f"{display_name}: {msg}")
-            
-            logger.info(f"Processing model {i+1}/{len(selected_models)}: {model_id}")
-            
+
+            # -- reveal this model's tab with "loading" state ---------------
+            u = _blank_updates()
+            _set(u, MODEL_TABS[model_id], visible=True)
+            _set(u, MODEL_COMPONENTS[model_id]["status"], value=f"Loading {display_name}...")
+            _set(u, MODEL_COMPONENTS[model_id]["progress"], value=progress_html(5, "Loading model..."))
+            _set(u, MODEL_COMPONENTS[model_id]["minutes"], value="")
+            yield u
+
+            # progress callback
+            def _make_cb(idx, name):
+                def cb(pct, msg):
+                    base = 0.2 + (0.7 / n_models) * idx
+                    portion = 0.7 / n_models
+                    progress(base + pct * portion, desc=f"{name}: {msg}")
+                return cb
+
+            model_cb = _make_cb(i, display_name)
+            logger.info(f"Processing model {i+1}/{n_models}: {model_id}")
+
             minutes, error, stats = generate_minutes(
                 model_id=model_id,
                 transcription=transcription,
-                quant_config=quant_config,
+                quant_config=quant_cfg,
                 stats_collector=app_state.stats_collector,
                 hf_token=app_state.hf_token,
-                progress_callback=model_progress_callback
+                progress_callback=model_cb,
             )
-            
+
+            # GPU cleanup happens inside generate_minutes already,
+            # but do an extra pass to be safe
+            clear_gpu_memory()
+
+            u = _blank_updates()
             if error:
                 app_state.errors[model_id] = error
                 logger.error(f"Error for {model_id}: {error}")
-                updates = _blank_updates()
-                _set_update(
-                    updates,
-                    MODEL_COMPONENTS[model_id]["status"],
-                    value="Generation failed."
-                )
-                _set_update(
-                    updates,
-                    MODEL_COMPONENTS[model_id]["progress"],
-                    value=progress_html(100, "Error")
-                )
-                _set_update(
-                    updates,
-                    MODEL_COMPONENTS[model_id]["minutes"],
-                    value=error
-                )
-                yield updates
+                _set(u, MODEL_COMPONENTS[model_id]["status"], value="Generation failed.")
+                _set(u, MODEL_COMPONENTS[model_id]["progress"], value=progress_html(100, "Error"))
+                _set(u, MODEL_COMPONENTS[model_id]["minutes"], value=f"**Error:** {error}")
             else:
                 app_state.results[model_id] = minutes
                 logger.info(f"Success for {model_id}")
-                updates = _blank_updates()
-                _set_update(
-                    updates,
-                    MODEL_COMPONENTS[model_id]["status"],
-                    value="Generation complete!"
-                )
-                _set_update(
-                    updates,
-                    MODEL_COMPONENTS[model_id]["progress"],
-                    value=progress_html(100, "Complete")
-                )
-                _set_update(
-                    updates,
-                    MODEL_COMPONENTS[model_id]["minutes"],
-                    value=minutes
-                )
-                yield updates
-        
-        # Step 3: GPT-4o-mini analysis (if 2+ models succeeded)
+                _set(u, MODEL_COMPONENTS[model_id]["status"], value="Generation complete!")
+                _set(u, MODEL_COMPONENTS[model_id]["progress"], value=progress_html(100, "Complete"))
+                _set(u, MODEL_COMPONENTS[model_id]["minutes"], value=minutes)
+            yield u
+
+        # ==================================================================
+        # STEP 3  –  Statistics tab  (only if >= 1 model succeeded)
+        # ==================================================================
+        successful = app_state.stats_collector.get_successful_stats()
+        u = _blank_updates()
+        if successful:
+            _set(u, stats_tab_col, visible=True)
+            _set(u, stats_group, visible=True)
+            _set(u, stats_notice, visible=False)
+            _set(u, performance_chart, value=create_performance_charts(successful))
+            _set(u, memory_chart, value=create_memory_charts(successful))
+        else:
+            _set(u, stats_tab_col, visible=True)
+            _set(u, stats_notice, value="No statistics available — all models failed.", visible=True)
+            _set(u, stats_group, visible=False)
+        yield u
+
+        # ==================================================================
+        # STEP 4  –  GPT-4o-mini analysis  (only if >= 2 succeeded)
+        # ==================================================================
         progress(0.95, desc="Analyzing results...")
-        
         analysis_text = ""
         if len(app_state.results) >= 2 and app_state.openai_key:
-            model_display_names = {
-                mid: get_model_display_name(mid) 
-                for mid in app_state.results.keys()
-            }
-            analysis_text = analyze_minutes(
-                app_state.results,
-                model_display_names,
-                app_state.openai_key
-            )
-        
-        # Update stats charts if any model succeeded
-        stats_updates = _blank_updates()
-        successful_stats = app_state.stats_collector.get_successful_stats()
-        if successful_stats:
-            perf_fig = create_performance_charts(successful_stats)
-            mem_fig = create_memory_charts(successful_stats)
-            _set_update(stats_updates, performance_chart, value=perf_fig)
-            _set_update(stats_updates, memory_chart, value=mem_fig)
-            _set_update(stats_updates, stats_group, visible=True)
-            _set_update(stats_updates, stats_notice, visible=False)
-        else:
-            _set_update(stats_updates, stats_group, visible=False)
-            _set_update(
-                stats_updates,
-                stats_notice,
-                value="No statistics available because all models failed.",
-                visible=True
-            )
-        yield stats_updates
-        
-        # Build final output
+            names = {mid: get_model_display_name(mid) for mid in app_state.results}
+            analysis_text = analyze_minutes(app_state.results, names, app_state.openai_key)
+
         progress(1.0, desc="Complete!")
-        
-        # Prepare updates
-        updates = _blank_updates()
-        _set_update(updates, generate_btn, value="Generate Minutes", variant="primary")
-        _set_update(updates, transcription_progress, visible=False)
-        
-        # Add analysis if available
+
+        u = _blank_updates()
+        _set(u, generate_btn, value="Generate Minutes", variant="primary")
+        _set(u, transcription_progress, visible=False)
         if analysis_text:
-            _set_update(updates, analysis_output, value=analysis_text, visible=True)
+            _set(u, analysis_output, value=analysis_text, visible=True)
         else:
-            _set_update(updates, analysis_output, visible=False)
-        
-        yield updates
-        
+            _set(u, analysis_output, visible=False)
+        yield u
+
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        updates = _blank_updates()
-        _set_update(updates, error_display, value=f"**Unexpected Error:** {str(e)}", visible=True)
-        _set_update(updates, generate_btn, value="Generate Minutes", variant="primary")
-        yield updates
+        u = _blank_updates()
+        _set(u, error_display, value=f"**Unexpected Error:** {str(e)}", visible=True)
+        _set(u, generate_btn, value="Generate Minutes", variant="primary")
+        yield u
     finally:
         app_state.is_processing = False
 
 
 def _handle_cancellation():
-    """Handle cancellation cleanup and UI updates."""
     logger.info("Processing cancelled by user")
     clear_gpu_memory()
     clear_transcription_cache()
-    
-    updates = _blank_updates()
-    _set_update(updates, error_display, value="**Processing cancelled.** All progress has been lost.", visible=True)
-    _set_update(updates, generate_btn, value="Generate Minutes", variant="primary")
-    _set_update(updates, transcription_progress, visible=False)
-    return updates
+    u = _blank_updates()
+    _set(u, error_display, value="**Processing cancelled.** All progress has been lost.", visible=True)
+    _set(u, generate_btn, value="Generate Minutes", variant="primary")
+    _set(u, transcription_progress, visible=False)
+    return u
 
 
-def on_cancel_click():
-    """Handle cancel button click."""
-    if app_state.is_processing:
-        # Show confirmation (handled via JS in real implementation)
-        app_state.cancel_requested = True
-        return gr.Button(value="Cancelling...", interactive=False)
-    return gr.Button(value="Generate Minutes", variant="primary")
-
-
-def get_model_info_html(model_id: str) -> str:
-    """Generate HTML for model info display."""
-    info = get_model_info(model_id)
-    if not info:
-        return ""
-    
-    return f"""
-### Model Information
-
-| Property | Value |
-|----------|-------|
-| **Organization** | {info.organization} |
-| **Parameters** | {info.parameters} |
-| **Size (FP16)** | {info.size_fp16} |
-| **Size (4-bit)** | {info.size_4bit} |
-| **Fine-tuned** | {"Yes - " + info.fine_tune_method if info.is_fine_tuned else "No"} |
-
-{info.description}
-"""
-
-
-# Initialize tokens on import
+# ---------------------------------------------------------------------------
+# Token init on import
+# ---------------------------------------------------------------------------
 initialize_tokens()
 
 
+# ---------------------------------------------------------------------------
+# UI construction
+# ---------------------------------------------------------------------------
+
 def create_app():
-    """Create and return the Gradio application."""
-    
-    # Define component references (will be assigned in the UI)
+    """Build and return the Gradio Blocks application."""
+
+    # globals written here, read by the generator above
     global error_display, generate_btn, transcription_progress
     global transcription_accordion, transcription_display, analysis_output
-    global performance_chart, memory_chart, stats_group, stats_notice
-    
-    # Get default values
+    global performance_chart, memory_chart, stats_group, stats_notice, stats_tab_col
+
     defaults = get_default_config()
     model_choices = get_model_choices()
-    
-    # Custom CSS for dark theme
-    custom_css = """
-    .gradio-container {
-        max-width: 1200px !important;
-    }
-    .model-warning {
-        color: #ffa500;
-        font-size: 0.9em;
-    }
-    .disabled-reason {
-        color: #888;
-        font-style: italic;
-        font-size: 0.85em;
-        margin-top: 4px;
-    }
+
+    css = """
+    .gradio-container { max-width: 1200px !important; }
+    .model-warning   { color: #ffa500; font-size: 0.9em; }
+    .disabled-reason  { color: #888; font-style: italic; font-size: 0.85em; margin-top: 4px; }
+    .time-warning     { color: #ccc; font-size: 0.85em; margin-top: 6px; }
     """
-    
+
     with gr.Blocks(
         title="Meeting Minutes Generator",
         theme=gr.themes.Soft(primary_hue="blue").set(
             body_background_fill="*neutral_950",
             body_background_fill_dark="*neutral_950",
         ),
-        css=custom_css
+        css=css,
     ) as app:
-        
-        gr.Markdown("""
-        # Meeting Minutes Generator
-        
-        Upload an audio file and generate professional meeting minutes using various AI models.
-        Compare outputs from different models and get AI-powered analysis of the results.
-        """)
-        
+
+        gr.Markdown(
+            "# Meeting Minutes Generator\n\n"
+            "Upload an audio file and generate professional meeting minutes "
+            "using various AI models.  Compare outputs and get AI-powered analysis."
+        )
+
         with gr.Tabs() as main_tabs:
-            
-            # Main Configuration Tab
+
+            # =============================================================
+            # TAB: Configuration
+            # =============================================================
             with gr.Tab("Configuration", id="config_tab"):
-                
-                # Error display
-                error_display = gr.Markdown(visible=False, elem_classes=["error-message"])
-                
-                # Row 1: File Upload
+
+                error_display = gr.Markdown(visible=False)
+
+                # -- file upload ------------------------------------------
                 with gr.Row():
                     audio_input = gr.Audio(
                         label="Upload Audio File (MP3, max 50MB)",
                         type="filepath",
-                        sources=["upload"]
+                        sources=["upload"],
                     )
-                
-                # Row 2: Model Selection and Quantization
+
+                # -- model selection + quantization -----------------------
                 with gr.Row():
-                    # Left column: Model selection
                     with gr.Column(scale=1):
                         gr.Markdown("### Model Selection")
-                        
                         model_selector = gr.Dropdown(
-                            label="Select Models (max 2)",
+                            label="Select Models",
                             choices=model_choices,
                             multiselect=True,
-                            max_choices=2,
-                            info="Select up to 2 models to generate minutes"
+                            info="Select the models you wish to compare when generating minutes",
                         )
-                        
                         gr.Markdown(
-                            "*⚠️ Some models require access approval. Visit the model page on "
-                            "Hugging Face to request access before using.*",
-                            elem_classes=["model-warning"]
+                            "*⚠️ Some models require access approval. "
+                            "Visit the model page on Hugging Face to request access before using.*",
+                            elem_classes=["model-warning"],
                         )
-                        
                         selected_models_display = gr.Markdown("")
-                    
-                    # Right column: Quantization options
+                        time_warning_display = gr.Markdown("", elem_classes=["time-warning"])
+
                     with gr.Column(scale=1):
                         gr.Markdown("### Quantization Settings")
-                        
                         bits_dropdown = gr.Dropdown(
                             label="Bits",
                             choices=get_bits_options(),
                             value=defaults["bits"],
-                            info="Number of bits for quantization"
+                            info="Number of bits for quantization",
                         )
-                        
                         double_quant_dropdown = gr.Dropdown(
                             label="Double Quantization",
                             choices=get_double_quant_options(defaults["bits"])[0],
                             value=defaults["double_quant"],
-                            info="Apply double quantization for more compression"
+                            info="Apply double quantization for more compression",
                         )
                         double_quant_reason = gr.Markdown(visible=False, elem_classes=["disabled-reason"])
-                        
                         quant_type_dropdown = gr.Dropdown(
                             label="Quantization Type",
                             choices=get_quant_type_options(defaults["bits"])[0],
                             value=defaults["quant_type"],
-                            info="Type of 4-bit quantization"
+                            info="Type of 4-bit quantization",
                         )
                         quant_type_reason = gr.Markdown(visible=False, elem_classes=["disabled-reason"])
-                
-                # Row 3: Generate Button
+
+                # -- generate button --------------------------------------
                 with gr.Row():
-                    generate_btn = gr.Button(
-                        "Generate Minutes",
-                        variant="primary",
-                        scale=2
-                    )
-                
-                # Row 4: Progress display
-                with gr.Row():
-                    transcription_progress = gr.Markdown(visible=False)
-                
-                # Row 5: Transcription display (collapsed)
+                    generate_btn = gr.Button("Generate Minutes", variant="primary", scale=2)
+
+                # -- transcription progress / result ----------------------
+                transcription_progress = gr.Markdown(visible=False)
                 transcription_accordion = gr.Accordion(
-                    label="Transcription (click to expand)",
-                    open=False,
-                    visible=False
+                    label="Transcription (click to expand)", open=False, visible=False
                 )
                 with transcription_accordion:
                     transcription_display = gr.Markdown()
-                
-                # Row 6: GPT-4o-mini Analysis
+
+                # -- GPT-4o-mini analysis ---------------------------------
                 gr.Markdown("### AI Analysis")
-                analysis_output = gr.Markdown(
-                    visible=False,
-                    label="GPT-4o-mini Analysis"
-                )
-            
-            # Model Result Tabs (pre-created for all models)
+                analysis_output = gr.Markdown(visible=False)
+
+            # =============================================================
+            # TABS: one per model (all hidden at start)
+            # =============================================================
             MODEL_COMPONENTS.clear()
+            MODEL_TABS.clear()
             MODEL_ORDER.clear()
+
             for model_id in model_choices:
                 display_name = get_model_display_name(model_id)
                 MODEL_ORDER.append(model_id)
-                with gr.Tab(display_name):
+
+                tab = gr.Tab(display_name, visible=False)
+                MODEL_TABS[model_id] = tab
+
+                with tab:
                     gr.Markdown(f"## {display_name}")
-                    model_info_md = gr.Markdown(get_model_info_html(model_id))
-                    model_status_md = gr.Markdown(
-                        value=f"Model {display_name} minute processing didn't start yet."
-                    )
-                    model_progress_html = gr.HTML(progress_html(0, "Not started"))
+                    m_info = gr.Markdown(get_model_info_html(model_id))
+                    m_status = gr.Markdown("")
+                    m_progress = gr.HTML("")
                     gr.Markdown("### Generated Minutes")
-                    model_minutes_md = gr.Markdown("")
-                    
+                    m_minutes = gr.Markdown("")
+
                     MODEL_COMPONENTS[model_id] = {
-                        "info": model_info_md,
-                        "status": model_status_md,
-                        "progress": model_progress_html,
-                        "minutes": model_minutes_md
+                        "info": m_info,
+                        "status": m_status,
+                        "progress": m_progress,
+                        "minutes": m_minutes,
                     }
-            
-            # Statistics Tab (created after processing)
-            with gr.Tab("Statistics", id="stats_tab") as stats_tab:
-                stats_notice = gr.Markdown(
-                    value="Statistics will appear here after processing completes.",
-                    visible=True
-                )
+
+            # =============================================================
+            # TAB: Statistics (hidden until results are ready)
+            # =============================================================
+            stats_tab_col = gr.Tab("Statistics", visible=False)
+            with stats_tab_col:
+                stats_notice = gr.Markdown(visible=False)
                 stats_group = gr.Group(visible=False)
                 with stats_group:
                     with gr.Tabs():
                         with gr.Tab("Performance"):
                             performance_chart = gr.Plot(label="Performance Statistics")
-                        
                         with gr.Tab("Memory"):
                             memory_chart = gr.Plot(label="Memory Statistics")
-        
-        # Event handlers
-        
-        # Update model display when selection changes
-        def update_model_display(models):
+
+        # =================================================================
+        # Event wiring
+        # =================================================================
+
+        # -- model-selection display + time warning -----------------------
+        def _on_model_change(models):
             if not models:
-                return ""
-            return "**Selected:** " + ", ".join([
-                get_model_display_name(m) for m in models
-            ])
-        
+                return "", ""
+            names = ", ".join(get_model_display_name(m) for m in models)
+            n = len(models)
+            warning = (
+                f"*Processing {n} model(s) sequentially may take approximately "
+                f"{n * 3}–{n * 8} minutes depending on model size and audio length.*"
+            ) if n > 1 else ""
+            return f"**Selected:** {names}", warning
+
         model_selector.change(
-            fn=update_model_display,
+            fn=_on_model_change,
             inputs=[model_selector],
-            outputs=[selected_models_display]
+            outputs=[selected_models_display, time_warning_display],
         )
-        
-        # Update quantization options when bits change
+
+        # -- quantization cascading dropdowns ----------------------------
         bits_dropdown.change(
             fn=update_double_quant_options,
             inputs=[bits_dropdown],
-            outputs=[double_quant_dropdown, double_quant_reason]
+            outputs=[double_quant_dropdown, double_quant_reason],
         ).then(
             fn=update_quant_type_options,
             inputs=[bits_dropdown],
-            outputs=[quant_type_dropdown, quant_type_reason]
+            outputs=[quant_type_dropdown, quant_type_reason],
         )
-        
-        # Generate button handler
-        # Build output list for updates
+
+        # -- build output list -------------------------------------------
         OUTPUT_COMPONENTS.clear()
         OUTPUT_COMPONENTS.extend([
-            error_display,
-            generate_btn,
-            transcription_progress,
-            transcription_accordion,
-            transcription_display,
-            analysis_output,
-            stats_notice,
-            stats_group,
-            performance_chart,
-            memory_chart
+            error_display,          # 0
+            generate_btn,           # 1
+            transcription_progress, # 2
+            transcription_accordion,# 3
+            transcription_display,  # 4
+            analysis_output,        # 5
+            stats_tab_col,          # 6
+            stats_notice,           # 7
+            stats_group,            # 8
+            performance_chart,      # 9
+            memory_chart,           # 10
         ])
-        
-        # Add model components to outputs
-        for model_id in MODEL_ORDER:
-            OUTPUT_COMPONENTS.extend([
-                MODEL_COMPONENTS[model_id]["status"],
-                MODEL_COMPONENTS[model_id]["progress"],
-                MODEL_COMPONENTS[model_id]["minutes"]
-            ])
-        
-        # Build output index for updates
+        for mid in MODEL_ORDER:
+            OUTPUT_COMPONENTS.append(MODEL_TABS[mid])          # tab visibility
+            OUTPUT_COMPONENTS.append(MODEL_COMPONENTS[mid]["status"])
+            OUTPUT_COMPONENTS.append(MODEL_COMPONENTS[mid]["progress"])
+            OUTPUT_COMPONENTS.append(MODEL_COMPONENTS[mid]["minutes"])
+
         OUTPUT_INDEX.clear()
         for idx, comp in enumerate(OUTPUT_COMPONENTS):
-            OUTPUT_INDEX[comp] = idx
-        
+            OUTPUT_INDEX[id(comp)] = idx
+
+        # -- generate button -> handler ----------------------------------
         generate_btn.click(
             fn=on_generate_click,
             inputs=[
@@ -686,21 +610,21 @@ def create_app():
                 model_selector,
                 bits_dropdown,
                 double_quant_dropdown,
-                quant_type_dropdown
+                quant_type_dropdown,
             ],
-            outputs=OUTPUT_COMPONENTS
+            outputs=OUTPUT_COMPONENTS,
         )
-    
+
     return app
 
 
+# ---------------------------------------------------------------------------
+# Launch
+# ---------------------------------------------------------------------------
+
 def launch_app():
-    """Launch the Gradio application."""
     app = create_app()
-    app.launch(
-        share=True,  # Create public link for Colab
-        debug=True
-    )
+    app.launch(share=True, debug=True)
 
 
 if __name__ == "__main__":
