@@ -102,15 +102,38 @@ def _btn_label(n_models: int) -> str:
 
 
 def _tooltip_html(label: str, tooltip: str) -> str:
-    """Render a label with an info tooltip icon (hover)."""
+    """Render a label with an info tooltip icon (hover).
+
+    Uses a unique-per-call ID so multiple tooltips on the same page
+    work independently.  The popup is rendered as a fixed-position
+    element placed via a tiny inline <script> to escape any
+    overflow:hidden parent that Gradio creates.
+    """
+    import hashlib
+    uid = hashlib.md5(label.encode()).hexdigest()[:8]
     return (
-        f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">'
+        f'<div style="display:flex;align-items:center;gap:6px;'
+        f'margin-bottom:2px;position:relative;">'
         f'<span style="font-weight:600;font-size:0.95em;">{label}</span>'
-        f'<span class="tt-wrap">'
-        f'<span class="tt-icon">i</span>'
-        f'<span class="tt-body">{tooltip}</span>'
-        f'</span>'
+        f'<span id="tt-icon-{uid}" class="tt-icon"'
+        f' onmouseenter="showTT_{uid}()" onmouseleave="hideTT_{uid}()">'
+        f'i</span>'
+        f'<div id="tt-body-{uid}" class="tt-body-fixed">{tooltip}</div>'
         f'</div>'
+        f'<script>'
+        f'function showTT_{uid}(){{'
+        f'  var icon=document.getElementById("tt-icon-{uid}");'
+        f'  var tip=document.getElementById("tt-body-{uid}");'
+        f'  var r=icon.getBoundingClientRect();'
+        f'  tip.style.position="fixed";'
+        f'  tip.style.left=(r.left+r.width/2-160)+"px";'
+        f'  tip.style.top=(r.bottom+8)+"px";'
+        f'  tip.style.display="block";'
+        f'}}'
+        f'function hideTT_{uid}(){{'
+        f'  document.getElementById("tt-body-{uid}").style.display="none";'
+        f'}}'
+        f'</script>'
     )
 
 
@@ -574,26 +597,22 @@ def create_app():
                         margin-top: 4px; }
     .time-warning     { color: #ccc; font-size: 0.85em; margin-top: 6px; }
     /* Tooltip styles */
-    .tt-wrap {
-        position: relative; display: inline-flex; cursor: help;
-    }
     .tt-icon {
         display: inline-flex; align-items: center; justify-content: center;
         width: 18px; height: 18px; border-radius: 50%;
         background: #4a90d9; color: #fff; font-size: 11px;
         font-weight: 700; font-style: italic; font-family: Georgia, serif;
+        cursor: help;
     }
-    .tt-body {
-        visibility: hidden; opacity: 0; position: absolute; z-index: 1000;
+    .tt-body-fixed {
+        display: none; position: fixed; z-index: 99999;
         width: 320px; background: #1e1e2e; color: #d0d0d0;
         padding: 12px 14px; border-radius: 8px; font-size: 0.82em;
-        line-height: 1.45; bottom: calc(100% + 8px); left: 50%;
-        transform: translateX(-50%); transition: opacity 0.2s;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-        border: 1px solid rgba(255,255,255,0.1);
+        line-height: 1.45;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.12);
         pointer-events: none;
     }
-    .tt-wrap:hover .tt-body { visibility: visible; opacity: 1; }
     """
 
     with gr.Blocks(
