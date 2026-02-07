@@ -104,36 +104,18 @@ def _btn_label(n_models: int) -> str:
 def _tooltip_html(label: str, tooltip: str) -> str:
     """Render a label with an info tooltip icon (hover).
 
-    Uses a unique-per-call ID so multiple tooltips on the same page
-    work independently.  The popup is rendered as a fixed-position
-    element placed via a tiny inline <script> to escape any
-    overflow:hidden parent that Gradio creates.
+    Pure-CSS approach: hovering the icon reveals the explanation
+    below as a normal block element (no absolute/fixed positioning),
+    so it is never clipped by Gradio's overflow:hidden containers.
     """
-    import hashlib
-    uid = hashlib.md5(label.encode()).hexdigest()[:8]
     return (
-        f'<div style="display:flex;align-items:center;gap:6px;'
-        f'margin-bottom:2px;position:relative;">'
+        f'<div class="tt-container">'
+        f'<div style="display:flex;align-items:center;gap:6px;">'
         f'<span style="font-weight:600;font-size:0.95em;">{label}</span>'
-        f'<span id="tt-icon-{uid}" class="tt-icon"'
-        f' onmouseenter="showTT_{uid}()" onmouseleave="hideTT_{uid}()">'
-        f'i</span>'
-        f'<div id="tt-body-{uid}" class="tt-body-fixed">{tooltip}</div>'
+        f'<span class="tt-icon">i</span>'
         f'</div>'
-        f'<script>'
-        f'function showTT_{uid}(){{'
-        f'  var icon=document.getElementById("tt-icon-{uid}");'
-        f'  var tip=document.getElementById("tt-body-{uid}");'
-        f'  var r=icon.getBoundingClientRect();'
-        f'  tip.style.position="fixed";'
-        f'  tip.style.left=(r.left+r.width/2-160)+"px";'
-        f'  tip.style.top=(r.bottom+8)+"px";'
-        f'  tip.style.display="block";'
-        f'}}'
-        f'function hideTT_{uid}(){{'
-        f'  document.getElementById("tt-body-{uid}").style.display="none";'
-        f'}}'
-        f'</script>'
+        f'<div class="tt-content">{tooltip}</div>'
+        f'</div>'
     )
 
 
@@ -597,22 +579,30 @@ def create_app():
                         margin-top: 4px; }
     .time-warning     { color: #ccc; font-size: 0.85em; margin-top: 6px; }
     /* Tooltip styles */
+    .tt-container { margin-bottom: 2px; }
     .tt-icon {
         display: inline-flex; align-items: center; justify-content: center;
         width: 18px; height: 18px; border-radius: 50%;
         background: #4a90d9; color: #fff; font-size: 11px;
         font-weight: 700; font-style: italic; font-family: Georgia, serif;
-        cursor: help;
+        cursor: help; flex-shrink: 0;
     }
-    .tt-body-fixed {
-        display: none; position: fixed; z-index: 99999;
-        width: 320px; background: #1e1e2e; color: #d0d0d0;
-        padding: 12px 14px; border-radius: 8px; font-size: 0.82em;
-        line-height: 1.45;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-        border: 1px solid rgba(255,255,255,0.12);
-        pointer-events: none;
+    .tt-content {
+        max-height: 0; overflow: hidden; opacity: 0;
+        transition: max-height 0.25s ease, opacity 0.2s ease,
+                    padding 0.25s ease, margin 0.25s ease;
+        background: #1a1a2e; color: #c8c8d0;
+        padding: 0 12px; margin-top: 0;
+        border-radius: 6px; font-size: 0.82em; line-height: 1.45;
+        border: 1px solid transparent;
     }
+    .tt-container:hover .tt-content {
+        max-height: 300px; opacity: 1;
+        padding: 10px 12px; margin-top: 6px;
+        border-color: rgba(255,255,255,0.08);
+    }
+    /* Spacing above generate button */
+    .generate-row { margin-top: 24px !important; }
     """
 
     with gr.Blocks(
@@ -754,7 +744,7 @@ def create_app():
                         )
 
                 # -- generate button (full width) --------------------------
-                with gr.Row():
+                with gr.Row(elem_classes=["generate-row"]):
                     generate_btn = gr.Button(
                         "Generate Minute", variant="primary", scale=2
                     )
