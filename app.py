@@ -89,6 +89,11 @@ def _set(updates, component, **kwargs):
         updates[idx] = gr.update(**kwargs)
 
 
+def _btn_label(n_models: int) -> str:
+    """Return the correct Generate button label based on model count."""
+    return "Generate Minute" if n_models <= 1 else "Generate Minutes"
+
+
 # ---------------------------------------------------------------------------
 # Token initialisation
 # ---------------------------------------------------------------------------
@@ -191,12 +196,14 @@ def on_generate_click(
     quant_type: str,
     progress=gr.Progress(),
 ):
+    btn_text = _btn_label(len(selected_models) if selected_models else 0)
+
     # ---- validate --------------------------------------------------------
     ok, err = validate_inputs(audio_file, selected_models)
     if not ok:
         u = _blank_updates()
         _set(u, error_display, value=f"**Error:** {err}", visible=True)
-        _set(u, generate_btn, value="Generate Minutes", variant="primary")
+        _set(u, generate_btn, value=btn_text, variant="primary")
         yield u
         return
 
@@ -213,8 +220,9 @@ def on_generate_click(
         _set(u, error_display, visible=False)
         _set(u, generate_btn, value="Cancel", variant="stop")
         _set(u, transcription_progress, value="Starting transcription...", visible=True)
-        _set(u, transcription_accordion, visible=False)
-        _set(u, analysis_output, visible=False)
+        _set(u, transcription_tab, visible=False)
+        _set(u, analysis_tab, visible=False)
+        _set(u, analysis_output, value="")
         _set(u, stats_tab_col, visible=False)
         _set(u, stats_notice, visible=False)
         _set(u, stats_group, visible=False)
@@ -229,7 +237,7 @@ def on_generate_click(
 
         # ---- cancellation check ------------------------------------------
         if app_state.cancel_requested:
-            yield _handle_cancellation()
+            yield _handle_cancellation(btn_text)
             return
 
         # ==================================================================
@@ -248,20 +256,29 @@ def on_generate_click(
         if trans_err:
             u = _blank_updates()
             _set(u, error_display, value=f"**Transcription Error:** {trans_err}", visible=True)
-            _set(u, generate_btn, value="Generate Minutes", variant="primary")
+            _set(u, generate_btn, value=btn_text, variant="primary")
             _set(u, transcription_progress, visible=False)
             yield u
             return
 
-        # show collapsed transcription
+        # show transcription in its own tab
+        audio_name = os.path.basename(audio_file) if audio_file else "unknown"
+        char_count = len(transcription)
+        word_count = len(transcription.split())
+        metadata_md = (
+            f"**Audio File:** {audio_name}  \n"
+            f"**Transcription Length:** {char_count:,} characters | {word_count:,} words"
+        )
+
         u = _blank_updates()
         _set(u, transcription_progress, value="Transcription complete!", visible=True)
-        _set(u, transcription_accordion, label="Transcription (click to expand)", open=False, visible=True)
+        _set(u, transcription_tab, visible=True)
+        _set(u, transcription_metadata, value=metadata_md)
         _set(u, transcription_display, value=transcription)
         yield u
 
         if app_state.cancel_requested:
-            yield _handle_cancellation()
+            yield _handle_cancellation(btn_text)
             return
 
         # clean GPU after Whisper
@@ -276,7 +293,7 @@ def on_generate_click(
 
         for i, model_id in enumerate(selected_models):
             if app_state.cancel_requested:
-                yield _handle_cancellation()
+                yield _handle_cancellation(btn_text)
                 return
 
             display_name = get_model_display_name(model_id)
@@ -357,32 +374,35 @@ def on_generate_click(
         progress(1.0, desc="Complete!")
 
         u = _blank_updates()
-        _set(u, generate_btn, value="Generate Minutes", variant="primary")
+        _set(u, generate_btn, value=btn_text, variant="primary")
         _set(u, transcription_progress, visible=False)
         if analysis_text:
-            _set(u, analysis_output, value=analysis_text, visible=True)
+            _set(u, analysis_tab, visible=True)
+            _set(u, analysis_output, value=analysis_text)
         else:
-            _set(u, analysis_output, visible=False)
+            _set(u, analysis_tab, visible=False)
         yield u
 
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
         u = _blank_updates()
         _set(u, error_display, value=f"**Unexpected Error:** {str(e)}", visible=True)
-        _set(u, generate_btn, value="Generate Minutes", variant="primary")
+        _set(u, generate_btn, value=btn_text, variant="primary")
         yield u
     finally:
         app_state.is_processing = False
 
 
-def _handle_cancellation():
+def _handle_cancellation(btn_text: str = "Generate Minute"):
     logger.info("Processing cancelled by user")
     clear_gpu_memory()
     clear_transcription_cache()
     u = _blank_updates()
     _set(u, error_display, value="**Processing cancelled.** All progress has been lost.", visible=True)
-    _set(u, generate_btn, value="Generate Minutes", variant="primary")
+    _set(u, generate_btn, value=btn_text, variant="primary")
     _set(u, transcription_progress, visible=False)
+    _set(u, transcription_tab, visible=False)
+    _set(u, analysis_tab, visible=False)
     return u
 
 
@@ -401,7 +421,8 @@ def create_app():
 
     # globals written here, read by the generator above
     global error_display, generate_btn, transcription_progress
-    global transcription_accordion, transcription_display, analysis_output
+    global transcription_tab, transcription_metadata, transcription_display
+    global analysis_tab, analysis_output
     global performance_chart, memory_chart, stats_group, stats_notice, stats_tab_col
 
     defaults = get_default_config()
@@ -489,19 +510,19 @@ def create_app():
 
                 # -- generate button --------------------------------------
                 with gr.Row():
-                    generate_btn = gr.Button("Generate Minutes", variant="primary", scale=2)
+                    generate_btn = gr.Button("Generate Minute", variant="primary", scale=2)
 
-                # -- transcription progress / result ----------------------
+                # -- status bar (shown below the button during processing) -
                 transcription_progress = gr.Markdown(visible=False)
-                transcription_accordion = gr.Accordion(
-                    label="Transcription (click to expand)", open=False, visible=False
-                )
-                with transcription_accordion:
-                    transcription_display = gr.Markdown()
 
-                # -- GPT-4o-mini analysis ---------------------------------
-                gr.Markdown("### AI Analysis")
-                analysis_output = gr.Markdown(visible=False)
+            # =============================================================
+            # TAB: Audio Transcription (hidden until transcription completes)
+            # =============================================================
+            transcription_tab = gr.Tab("Audio Transcription", visible=False)
+            with transcription_tab:
+                gr.Markdown("## Audio Transcription")
+                transcription_metadata = gr.Markdown("")
+                transcription_display = gr.Markdown("")
 
             # =============================================================
             # TABS: one per model (all hidden at start)
@@ -546,26 +567,37 @@ def create_app():
                         with gr.Tab("Memory"):
                             memory_chart = gr.Plot(label="Memory Statistics")
 
+            # =============================================================
+            # TAB: GPT-4o Best Minute Analysis (hidden until analysis done)
+            # =============================================================
+            analysis_tab = gr.Tab("GPT-4o Best Minute Analysis", visible=False)
+            with analysis_tab:
+                gr.Markdown("## GPT-4o Best Minute Analysis")
+                analysis_output = gr.Markdown("")
+
         # =================================================================
         # Event wiring
         # =================================================================
 
-        # -- model-selection display + time warning -----------------------
+        # -- model-selection display + time warning + button label --------
         def _on_model_change(models):
             if not models:
-                return "", ""
+                btn = gr.update() if app_state.is_processing else gr.update(value="Generate Minute")
+                return "", "", btn
             names = ", ".join(get_model_display_name(m) for m in models)
             n = len(models)
             warning = (
                 f"*Processing {n} model(s) sequentially may take approximately "
-                f"{n * 3}–{n * 8} minutes depending on model size and audio length.*"
+                f"{n * 3}\u2013{n * 8} minutes depending on model size and audio length.*"
             ) if n > 1 else ""
-            return f"**Selected:** {names}", warning
+            btn_text = _btn_label(n)
+            btn = gr.update() if app_state.is_processing else gr.update(value=btn_text)
+            return f"**Selected:** {names}", warning, btn
 
         model_selector.change(
             fn=_on_model_change,
             inputs=[model_selector],
-            outputs=[selected_models_display, time_warning_display],
+            outputs=[selected_models_display, time_warning_display, generate_btn],
         )
 
         # -- quantization cascading dropdowns ----------------------------
@@ -585,14 +617,16 @@ def create_app():
             error_display,          # 0
             generate_btn,           # 1
             transcription_progress, # 2
-            transcription_accordion,# 3
-            transcription_display,  # 4
-            analysis_output,        # 5
-            stats_tab_col,          # 6
-            stats_notice,           # 7
-            stats_group,            # 8
-            performance_chart,      # 9
-            memory_chart,           # 10
+            transcription_tab,      # 3  (tab visibility)
+            transcription_metadata, # 4
+            transcription_display,  # 5
+            analysis_tab,           # 6  (tab visibility)
+            analysis_output,        # 7
+            stats_tab_col,          # 8
+            stats_notice,           # 9
+            stats_group,            # 10
+            performance_chart,      # 11
+            memory_chart,           # 12
         ])
         for mid in MODEL_ORDER:
             OUTPUT_COMPONENTS.append(MODEL_TABS[mid])          # tab visibility
