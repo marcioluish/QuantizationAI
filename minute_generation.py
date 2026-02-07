@@ -73,6 +73,9 @@ def generate_minutes(
     stats = stats_collector.start_model(model_id, display_name)
     stats_collector.reset_gpu_peak_memory()
     
+    model = None
+    tokenizer = None
+    
     try:
         # Progress: 0%
         if progress_callback:
@@ -136,15 +139,23 @@ def generate_minutes(
             {"role": "user", "content": USER_PROMPT_TEMPLATE.format(transcription=transcription)}
         ]
         
-        # Tokenize input
+        # Tokenize input – apply_chat_template may return a plain tensor
+        # or a BatchEncoding depending on transformers version.
         logger.info("Tokenizing input")
-        inputs = tokenizer.apply_chat_template(
+        tokenized = tokenizer.apply_chat_template(
             messages,
             return_tensors="pt",
             add_generation_prompt=True
-        ).to(model.device)
+        )
         
-        input_length = inputs.shape[1]
+        # Extract tensor: BatchEncoding → .input_ids, plain tensor → use directly
+        if hasattr(tokenized, "input_ids"):
+            input_ids = tokenized["input_ids"].to(model.device)
+        else:
+            input_ids = tokenized.to(model.device)
+        
+        input_length = input_ids.shape[1]
+        logger.info(f"Input length: {input_length} tokens")
         
         # Progress: 60%
         if progress_callback:
@@ -160,7 +171,7 @@ def generate_minutes(
             )
             
             outputs = model.generate(
-                inputs,
+                input_ids,
                 max_new_tokens=2000,
                 do_sample=True,
                 temperature=0.7,
@@ -194,6 +205,8 @@ def generate_minutes(
         logger.info("Cleaning up model")
         del model
         del tokenizer
+        model = None
+        tokenizer = None
         clear_gpu_memory()
         
         # Progress: 100%
@@ -208,8 +221,14 @@ def generate_minutes(
         error_msg = f"Generation failed: {str(e)}"
         logger.error(error_msg, exc_info=True)
         
-        # Clean up on error
-        clear_gpu_memory()
+        # Explicitly release model/tokenizer so GPU memory is freed
+        if model is not None:
+            del model
+            model = None
+        if tokenizer is not None:
+            del tokenizer
+            tokenizer = None
+        clear_gpu_memory(f"error cleanup - {model_id}")
         
         # Record failure
         stats_collector.finish_model(model_id, 0, success=False, error_message=error_msg)

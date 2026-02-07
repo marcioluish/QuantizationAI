@@ -50,7 +50,7 @@ def transcribe_audio(
         pipe = pipeline(
             "automatic-speech-recognition",
             model="openai/whisper-medium.en",
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device="cuda" if torch.cuda.is_available() else "cpu",
             return_timestamps=True
         )
