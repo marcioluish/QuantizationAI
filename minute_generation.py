@@ -50,7 +50,9 @@ def generate_minutes(
     quant_config: Dict[str, str],
     stats_collector: StatisticsCollector,
     hf_token: Optional[str] = None,
-    progress_callback: Optional[Callable[[float, str], None]] = None
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    stats_key: Optional[str] = None,
+    stats_display_name: Optional[str] = None,
 ) -> Tuple[str, Optional[str], ModelStatistics]:
     """
     Generate meeting minutes using a specified model.
@@ -62,15 +64,18 @@ def generate_minutes(
         stats_collector: Statistics collector instance
         hf_token: Hugging Face token for gated models
         progress_callback: Optional callback for progress updates
+        stats_key: Unique key for statistics (defaults to model_id)
+        stats_display_name: Display name for statistics charts
         
     Returns:
         Tuple of (generated_minutes, error_message, statistics)
     """
     model_info = get_model_info(model_id)
-    display_name = get_model_display_name(model_id)
+    display_name = stats_display_name or get_model_display_name(model_id)
+    _stats_key = stats_key or model_id
     
     # Initialize statistics
-    stats = stats_collector.start_model(model_id, display_name)
+    stats = stats_collector.start_model(_stats_key, display_name)
     stats_collector.reset_gpu_peak_memory()
     
     model = None
@@ -86,7 +91,7 @@ def generate_minutes(
         # Check model access
         has_access, access_error = check_model_access(model_id, hf_token)
         if not has_access:
-            stats_collector.finish_model(model_id, 0, success=False, error_message=access_error)
+            stats_collector.finish_model(_stats_key, 0, success=False, error_message=access_error)
             return "", access_error, stats
         
         # Progress: 10%
@@ -167,7 +172,7 @@ def generate_minutes(
         with torch.no_grad():
             # Track first token timing via stopping criteria
             first_token_criteria = FirstTokenRecorder(
-                lambda: stats_collector.record_first_token(model_id)
+                lambda: stats_collector.record_first_token(_stats_key)
             )
             
             outputs = model.generate(
@@ -199,7 +204,7 @@ def generate_minutes(
             minutes = filter_thinking_tokens(minutes)
         
         # Finish statistics
-        stats_collector.finish_model(model_id, tokens_generated, success=True)
+        stats_collector.finish_model(_stats_key, tokens_generated, success=True)
         
         # Clean up model
         logger.info("Cleaning up model")
@@ -231,7 +236,7 @@ def generate_minutes(
         clear_gpu_memory(f"error cleanup - {model_id}")
         
         # Record failure
-        stats_collector.finish_model(model_id, 0, success=False, error_message=error_msg)
+        stats_collector.finish_model(_stats_key, 0, success=False, error_message=error_msg)
         
         if progress_callback:
             progress_callback(1.0, f"Error: {str(e)}")

@@ -27,6 +27,47 @@ BITS_OPTIONS = ["4", "8"]
 DOUBLE_QUANT_OPTIONS = ["True", "False"]
 QUANT_TYPE_OPTIONS = ["nf4", "fp4"]
 
+# Tooltip descriptions (HTML) for the UI
+TOOLTIP_BITS = (
+    "Number of bits used to represent model weights after quantization."
+    "<br><br>"
+    "<b>4-bit</b> — Reduces memory by ~75%. Best balance of size and "
+    "quality for most LLMs. Enables NF4/FP4 format selection and "
+    "optional double quantization."
+    "<br>"
+    "<b>8-bit</b> — Reduces memory by ~50% with very minimal quality "
+    "impact. Uses int8 format. Double quantization and type selection "
+    "are not available."
+)
+
+TOOLTIP_DOUBLE_QUANT = (
+    "Applies a second round of quantization to the quantization "
+    "constants themselves, saving ~0.4 bits per parameter with "
+    "negligible quality impact."
+    "<br><br>"
+    "<b>True</b> — Enables double quantization for extra memory "
+    "savings. Recommended when using 4-bit."
+    "<br>"
+    "<b>False</b> — Standard single-pass quantization. Marginally "
+    "faster inference."
+    "<br><br>"
+    "<em>Only available with 4-bit quantization.</em>"
+)
+
+TOOLTIP_QUANT_TYPE = (
+    "Data format used for 4-bit quantized weights."
+    "<br><br>"
+    "<b>nf4</b> (NormalFloat4) — Information-theoretically optimal "
+    "for normally-distributed weights, which is the typical "
+    "distribution in transformer models. Recommended for most LLMs."
+    "<br>"
+    "<b>fp4</b> (FloatingPoint4) — Standard 4-bit floating-point "
+    "representation. Alternative when weight distributions deviate "
+    "from normal."
+    "<br><br>"
+    "<em>Only available with 4-bit quantization.</em>"
+)
+
 
 def get_bits_options() -> List[str]:
     """Get available bits options."""
