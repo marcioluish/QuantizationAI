@@ -66,16 +66,8 @@ def transcribe_audio(
         if progress_callback:
             progress_callback(0.50, "Transcribing audio...")
         
-        # Perform transcription with chunking for long audio.
-        # batch_size=1 to avoid OOM: each 30s chunk builds a KV cache
-        # during beam search, and multiple batches multiply that usage.
         log_gpu_memory("before Whisper inference")
-        result = pipe(
-            audio_path,
-            chunk_length_s=30,
-            batch_size=1,
-            return_timestamps=True
-        )
+        result = pipe(audio_path)
         log_gpu_memory("after Whisper inference")
         
         # Progress: 75%
