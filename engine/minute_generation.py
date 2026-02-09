@@ -8,10 +8,10 @@ from typing import Callable, Optional, Tuple, Dict
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteria, StoppingCriteriaList
 
-from model_configs import get_model_info, get_model_display_name
-from quantization import create_quantization_config
-from stats import StatisticsCollector, ModelStatistics
-from utils import clear_gpu_memory, log_gpu_memory, filter_thinking_tokens, check_model_access, logger
+from engine.model_configs import get_model_info, get_model_display_name
+from engine.quantization import create_quantization_config
+from engine.stats import StatisticsCollector, ModelStatistics
+from engine.utils import clear_gpu_memory, log_gpu_memory, filter_thinking_tokens, check_model_access, logger
 
 
 # System prompt for minute generation

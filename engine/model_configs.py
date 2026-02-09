@@ -1,5 +1,5 @@
 """
-Model configurations and metadata for the Meeting Minutes Generator.
+Model configurations and metadata.
 Contains all available models with their properties and descriptions.
 """
 

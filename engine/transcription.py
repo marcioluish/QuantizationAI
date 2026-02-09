@@ -8,7 +8,7 @@ from typing import Callable, Optional, Tuple
 
 import torch
 
-from utils import clear_gpu_memory, log_gpu_memory, logger
+from engine.utils import clear_gpu_memory, log_gpu_memory, logger
 
 
 # Transcription cache (in-memory)

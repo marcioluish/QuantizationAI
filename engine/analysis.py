@@ -5,7 +5,7 @@ GPT-4o-mini analysis module for comparing generated meeting minutes.
 import logging
 from typing import Dict, List, Optional
 
-from utils import logger
+from engine.utils import logger
 
 
 # Prompt for comparing multiple minutes
