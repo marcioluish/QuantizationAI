@@ -155,7 +155,8 @@ def on_generate_click(
             }
             unique_key = f"{model_id}_{i}"
             qt_short = config["quant_type"] if config["bits"] == "4" else "int8"
-            tab_label = f"{display_name} ({config['bits']}-bit {qt_short})"
+            dq_short = "DQ" if config["double_quant"] == "True" else "noDQ"
+            tab_label = f"{display_name} ({config['bits']}-bit {qt_short} {dq_short})"
             stats_display = tab_label
             slot = RESULT_SLOTS[i]
 
@@ -227,7 +228,8 @@ def on_generate_click(
                 ukey = f"{cfg['model_id']}_{j}"
                 if ukey in app_state.results:
                     qt_s = cfg["quant_type"] if cfg["bits"] == "4" else "int8"
-                    names[ukey] = f"{cfg['display_name']} ({cfg['bits']}-bit {qt_s})"
+                    dq_s = "DQ" if cfg["double_quant"] == "True" else "noDQ"
+                    names[ukey] = f"{cfg['display_name']} ({cfg['bits']}-bit {qt_s} {dq_s})"
             analysis_text = analyze_minutes(app_state.results, names, app_state.openai_key)
 
         progress(1.0, desc="Complete!")
